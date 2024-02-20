@@ -8,26 +8,43 @@ use RetailCrm\Api\Model\Request\Customers\CustomersEditRequest;
 use RetailCrm\Api\Exception\Client\BuilderException;
 use RetailCrm\Api\Enum\ByIdentifier;
 use RetailCrm\Api\Model\Entity\Customers\Customer;
+use Monolog\Level;
+use Monolog\Logger;
+use Monolog\Handler\StreamHandler;
+use Monolog\Formatter\LineFormatter;
 
+$dateFormat = "Y:m:d, H:i:s e";
+$output = "%datetime% > %message%\n";
+$formatter = new LineFormatter($output, $dateFormat);
+$streamResult = new StreamHandler("operationResult.log", Level::Info);
+$streamResult->setFormatter($formatter);
+$logResult = new Logger('operationResult');
+$logResult->pushHandler($streamResult);
 
-$url = '';
-$apiKey = '';
+$formatterError = new LineFormatter(null,null,false,false,true);
+$streamError = new StreamHandler("errors.log", Level::Error);
+$streamError->setFormatter($formatterError);
+$logError = new Logger('error');
+$logError->pushHandler($streamError);
+
+$dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
+$dotenv->load();
+
+$url = $_ENV['API_URL'];
+$apiKey = $_ENV['API_KEY'];
 
 try {
     $client = SimpleClientFactory::createClient($url, $apiKey);
     $userSettings = $client->settings->get();
     $userSettingsTimeZone = $userSettings->settings->timezone->value;
-} catch (BuilderException $e) {
-    echo "BuilderException occurred: " . $e->getMessage();
-    exit;
-} catch (ApiExceptionInterface $e) {
-    echo "Error occurred while fetching user settings: " . $e->getMessage();
+} catch (BuilderException|ApiExceptionInterface $e) {
+    $logError->error($e);
     exit;
 }
 
 if (($handle = fopen("book1.csv", "r")) !== FALSE) {
-
-    while (($data = fgetcsv($handle, 0, ",")) !== FALSE) {
+    $lineNumber = 1;
+    while (($data = fgetcsv($handle)) !== FALSE) {
         $email = $data[0];
         if (!empty($email)) {
             $userRequest = new CustomersRequest();
@@ -44,16 +61,19 @@ if (($handle = fopen("book1.csv", "r")) !== FALSE) {
                     $emailUnsubscribeDate = new DateTime("now", new DateTimeZone($userSettingsTimeZone));
                     $editRequest->customer->emailMarketingUnsubscribedAt = $emailUnsubscribeDate;
                     $userResponse = $client->customers->edit($customer->id, $editRequest);
-                    echo "Customer: " . $customer->id . " is successfully unsubscribed\n";
+                    $logResult->info("Успех. $email в строке $lineNumber. Клиент с id $customer->id был успешно отписан");
                 } else {
-                    echo "Customer: " . $customer->id . " is already unsubscribed\n";
+                    $logResult->info("Без изменений. $email в строке $lineNumber. Клиент с id $customer->id был отписан ранее");
                 }
             } else {
-                echo "Customer with email $email not found in CRM\n";
+                $logResult->info("Не найден. $email в строке $lineNumber. Клиент с указанным адресом не найден в CRM");
             }
         } else {
-            echo "Empty email provided\n";
+            $logResult->info("Артефакт. В строке $lineNumber. Не было обнаружено адреса");
         }
+        $lineNumber++;
     }
+    fclose($handle);
 }
-fclose($handle);
+$logResult->close();
+$logError->close();
